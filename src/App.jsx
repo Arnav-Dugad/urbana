@@ -168,20 +168,24 @@ export default function App() {
           <LayerControl visible={visible} onToggle={toggleLayer} />
         </div>
 
-        {/* Middle: legend + compare drawer */}
+        {/* Middle: legend */}
         <div className="flex flex-1 items-end justify-start gap-3 overflow-hidden p-3 sm:p-4">
           <div className="hidden pointer-events-auto sm:block">
             <Legend />
           </div>
-          <div className="pointer-events-auto ml-auto max-w-full">
-            <CompareDrawer
-              open={compareOpen}
-              primary={{ name: placeName, data: primary.data }}
-              secondary={compare ? { name: compare.name, data: secondary.data, loading: secondary.loading } : null}
-              onClose={toggleCompare}
-              onClear={() => setCompare(null)}
-            />
-          </div>
+        </div>
+      </div>
+
+      {/* Compare drawer — own layer above score panel and bottom sheet */}
+      <div className="pointer-events-none absolute inset-0 z-[1200]">
+        <div className="absolute bottom-[5.5rem] left-3 max-w-[calc(100vw-1.5rem)] pointer-events-auto sm:bottom-6 sm:left-4 sm:max-w-[420px]">
+          <CompareDrawer
+            open={compareOpen}
+            primary={{ name: placeName, data: primary.data }}
+            secondary={compare ? { name: compare.name, data: secondary.data, loading: secondary.loading } : null}
+            onClose={toggleCompare}
+            onClear={() => setCompare(null)}
+          />
         </div>
       </div>
 

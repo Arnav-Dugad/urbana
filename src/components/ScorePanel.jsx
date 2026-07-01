@@ -178,6 +178,11 @@ export default function ScorePanel({
           </motion.div>
         )}
       </div>
+
+      {/* Footer */}
+      <div className="mt-3 border-t border-white/[0.06] pt-2.5 text-center text-[10.5px] text-slate-600">
+        Arnav &copy; {new Date().getFullYear()}
+      </div>
     </div>
   );
 }

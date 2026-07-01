@@ -1,21 +1,22 @@
 # Urbana — Urban Livability Analysis
 
-Measure the **greenery**, **walkability** and **air quality** of any neighbourhood on Earth from a single click on the map. Urbana runs entirely in the browser on free, keyless open data, and is tuned to be accurate across Indian cities.
+Measure the **greenery**, **walkability**, **transit** and **air quality** of any neighbourhood on Earth from a single click on the map. Urbana runs in the browser on free, keyless open data (with a thin same-origin proxy for reliability), and is tuned to be accurate across Indian cities.
 
-![Analysis covers a 1 km radius around any point.](public/favicon.svg)
+![Urbana livability dashboard](public/og.png)
 
 ## What it does
 
-Pick a location (search, "use my location", or click the map) and Urbana analyses everything within a **1 km radius**:
+Pick a location (search, "use my location", or click the map), choose an **analysis radius** (½ / 1 / 2 km), and Urbana scores everything around it:
 
-| Score | 0–100 | Based on |
+| Pillar | 0–100 | Based on |
 | ----- | ----- | -------- |
-| **Greenery** | green land-cover fraction (parks, gardens, grass, woodland) + mapped trees | OpenStreetMap via Overpass |
+| **Greenery** | green **+ blue** land-cover fraction (parks, gardens, grass, woodland, rivers/lakes) + mapped trees | OpenStreetMap via Overpass |
 | **Walkability** | distance-weighted, diversity-adjusted access to pharmacies, supermarkets, schools (+ Indian convenience stores, markets, clinics) | OpenStreetMap via Overpass |
-| **Air quality** | inverse of ground-level PM2.5 | Open-Meteo Air Quality API |
-| **Livability** | weighted blend of the three (0.35 / 0.35 / 0.30) | — |
+| **Transit** | distance-weighted access to public transport — metro/rail & bus stations count more than lone stops | OpenStreetMap via Overpass |
+| **Air quality** | inverse of ground-level PM2.5 (+ PM10, NO₂, O₃, US AQI, 24 h trend) | Open-Meteo |
+| **Livability** | weighted blend (0.25 / 0.30 / 0.20 / 0.25), renormalized when a pillar is unavailable | — |
 
-Plus: place search & reverse-geocoding (Nominatim), **shareable URLs** (`?lat=&lon=`), and a **compare mode** to pit two neighbourhoods against each other.
+Plus: a **radar chart** of all pillars, **drill-down** POI lists (click to fly to on the map), **layer toggles** & a POI **density heatmap**, **saved places** + recent searches, live **weather** context, a downloadable **report card** (PNG), a **"how scores work"** methodology view, place search & reverse-geocoding (Nominatim), **compare mode** with a radar overlay, **shareable URLs** (`?lat=&lon=&r=`), and an installable **PWA** (offline app shell). Fully responsive with a collapsible mobile bottom sheet.
 
 ## Why it's accurate for India
 
@@ -27,17 +28,19 @@ Every scoring constant lives in [`src/config/tags.js`](src/config/tags.js) so th
 
 ## Tech
 
-React + Vite · Tailwind CSS · react-leaflet (CARTO dark basemap) · Turf.js (geodesic areas) · Framer Motion. No backend, no API keys, no secrets.
+React + Vite · Tailwind CSS · react-leaflet (CARTO dark basemap) · Turf.js (geodesic areas) · Framer Motion · leaflet.heat · html-to-image · vite-plugin-pwa. Radar/sparkline are hand-rolled SVG (no charting dependency).
+
+Data flows through two tiny **same-origin serverless proxies** ([`api/overpass.js`](api/overpass.js), [`api/geocode.js`](api/geocode.js)) so the browser never hits third-party APIs directly — this removes CORS, ad-blocker and per-client rate-limit/`406` failures. The Vite dev server mirrors both proxies so `npm run dev` behaves exactly like production.
 
 The core is a reusable hook:
 
 ```js
-const { data, loading, error, refetch } = useUrbanAnalysis(lat, lon);
-// data.greeneryScore, data.walkabilityScore, data.airQualityScore,
-// data.livabilityScore, data.breakdown, data.elements
+const { data, loading, error, refetch } = useUrbanAnalysis(lat, lon, radius);
+// data.greeneryScore, data.walkabilityScore, data.transitScore,
+// data.airQualityScore, data.livabilityScore, data.breakdown, data.elements
 ```
 
-It fetches Overpass + Open-Meteo **in parallel**, cancels stale requests with `AbortController`, degrades gracefully if air data is unavailable, retries across Overpass mirrors on rate-limits, and caches results in `localStorage`.
+It fetches Overpass + air quality + weather **in parallel**, cancels stale requests with `AbortController`, degrades gracefully if any best-effort source fails, retries across Overpass mirrors on rate-limits, and caches results in `localStorage` (keyed by coords **and** radius).
 
 ## Run locally
 

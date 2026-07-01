@@ -7,7 +7,7 @@
  * analysis stuck loading. If the proxy itself is unreachable we fall back to
  * hitting public mirrors directly, so the app still degrades gracefully.
  */
-import { ANALYSIS_RADIUS_M, GREEN_TAGS, WALK_TAGS } from '../config/tags.js';
+import { ANALYSIS_RADIUS_M, GREEN_TAGS, WATER_TAGS, WALK_TAGS, TRANSIT_TAGS } from '../config/tags.js';
 
 const PROXY_URL = '/api/overpass';
 
@@ -31,8 +31,10 @@ export function buildOverpassQuery(lat, lon, radius = ANALYSIS_RADIUS_M) {
   const allTags = [
     ...GREEN_TAGS.base,
     ...GREEN_TAGS.extended,
+    ...WATER_TAGS,
     ...WALK_TAGS.base,
     ...WALK_TAGS.extended,
+    ...TRANSIT_TAGS,
   ];
 
   const lines = allTags.map(([k, v]) => `  nwr["${k}"="${v}"]${around};`).join('\n');

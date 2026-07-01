@@ -148,6 +148,52 @@ body::before {
   border-top-color: rgba(14, 20, 27, 0.95);
 }
 
+/* Dark Leaflet popups */
+.leaflet-popup-content-wrapper {
+  background: rgba(14, 20, 27, 0.96) !important;
+  color: #e6edf3 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.85) !important;
+  backdrop-filter: blur(8px);
+}
+.leaflet-popup-content {
+  margin: 9px 12px !important;
+  line-height: 1.35 !important;
+}
+.leaflet-popup-tip {
+  background: rgba(14, 20, 27, 0.96) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+.leaflet-popup-close-button {
+  color: #94a3b8 !important;
+}
+
+/* Drill-down focused marker */
+.poi-dot.poi-focused {
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.25), 0 0 12px 3px currentColor;
+  animation: poi-pulse 1.4s ease-out infinite;
+}
+@keyframes poi-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.9); }
+  100% { transform: scale(1); }
+}
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .pulse-pin::after {
+    display: none;
+  }
+}
+
 /* Thin scrollbar in panels */
 .scroll-thin::-webkit-scrollbar {
   width: 6px;

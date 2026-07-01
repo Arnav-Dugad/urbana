@@ -1,16 +1,18 @@
 /**
- * The scoring engine. Turns raw Overpass elements into normalized 0–100
+ * The scoring engine (v2). Turns raw Overpass elements into normalized 0–100
  * scores with a transparent, defensible model (see config/tags.js for every
  * constant). Nothing here is random — each score maps to a real quantity:
- *   greenery      → fraction of land within 1 km that is green space
+ *   greenery      → fraction of land that is green + blue space (+ tree bonus)
  *   walkability   → distance-weighted, diversity-adjusted access to essentials
+ *   transit       → distance-weighted access to public transport (stations > stops)
  *   air quality   → inverse of ground-level PM2.5
- *   livability    → weighted blend of the above
+ *   livability    → weighted blend of the above, renormalized if any are absent
  */
 import {
-  ANALYSIS_AREA_M2,
+  analysisAreaM2,
   CATEGORY,
   ESSENTIAL_WALK_CATEGORIES,
+  TRANSIT_WEIGHT,
   SCORING,
 } from '../config/tags.js';
 import { haversineMeters, polygonAreaM2, clamp } from './geo.js';
@@ -45,14 +47,15 @@ function elementCoord(el) {
  * Parse the Overpass payload into structured, de-duplicated elements plus the
  * raw aggregates the scorers need.
  */
-export function parseOverpass(json, originLat, originLon) {
+export function parseOverpass(json, originLat, originLon, radius) {
   const elements = [];
   let greenAreaM2 = 0;
+  let blueAreaM2 = 0;
   let treeCount = 0;
   let parkCount = 0;
 
-  // A single park can be returned as a relation AND its member ways; track
-  // seen ids per element type so we don't double-count.
+  // A single feature can be returned as a relation AND its member ways; track
+  // seen ids so we don't double-count.
   const seen = new Set();
 
   for (const el of json.elements || []) {
@@ -68,8 +71,9 @@ export function parseOverpass(json, originLat, originLon) {
     if (info.group === 'green') {
       if (info.category === 'tree') {
         treeCount += 1;
+      } else if (info.water) {
+        blueAreaM2 += polygonAreaM2(el.geometry);
       } else {
-        // Polygonal green space → accumulate real area.
         const area = polygonAreaM2(el.geometry);
         greenAreaM2 += area;
         if (info.category === 'park' || info.category === 'garden') parkCount += 1;
@@ -85,25 +89,30 @@ export function parseOverpass(json, originLat, originLon) {
       category: info.category,
       label: info.label,
       color: info.color,
+      water: !!info.water,
       name: el.tags.name || el.tags['name:en'] || info.label,
-      dist: haversineMeters(originLat, originLon, coord.lat, coord.lon),
+      dist: Math.round(haversineMeters(originLat, originLon, coord.lat, coord.lon)),
     });
   }
 
-  // Green area can't exceed the analysis disc (overlapping polygons).
-  greenAreaM2 = Math.min(greenAreaM2, ANALYSIS_AREA_M2);
+  const areaCap = analysisAreaM2(radius);
+  greenAreaM2 = Math.min(greenAreaM2, areaCap);
+  blueAreaM2 = Math.min(blueAreaM2, areaCap);
 
-  return { elements, greenAreaM2, treeCount, parkCount };
+  return { elements, greenAreaM2, blueAreaM2, treeCount, parkCount };
 }
 
-/** Greenery: land-cover fraction (sqrt curve) + capped tree bonus. */
-export function greeneryScore({ greenAreaM2, treeCount }) {
-  const cover = greenAreaM2 / ANALYSIS_AREA_M2; // 0..1
+/** Greenery: green + blue land-cover fraction (sqrt curve) + capped tree bonus. */
+export function greeneryScore({ greenAreaM2, blueAreaM2, treeCount }, radius) {
+  const area = analysisAreaM2(radius);
+  const effective = greenAreaM2 + SCORING.BLUE_WEIGHT * blueAreaM2;
+  const cover = effective / area; // 0..1
   const coverPts = 100 * Math.sqrt(clamp(cover / SCORING.GREEN_COVER_TARGET, 0, 1));
   const treePts = Math.min(SCORING.TREE_BONUS_CAP, treeCount / SCORING.TREE_BONUS_PER);
   return {
     score: Math.round(clamp(coverPts + treePts, 0, 100)),
-    coverPct: cover * 100,
+    greenCoverPct: (greenAreaM2 / area) * 100,
+    blueCoverPct: (blueAreaM2 / area) * 100,
   };
 }
 
@@ -121,9 +130,7 @@ export function walkabilityScore(elements) {
     perCat[e.category] = (perCat[e.category] || 0) + w;
   }
 
-  // Essentials drive the base score; extended categories add a small top-up.
-  // Each category saturates via 1 - exp(-weightSum / K): one nearby amenity
-  // already scores that category well, extras give diminishing returns.
+  // Each essential category saturates via 1 - exp(-weightSum / K).
   let essentialScore = 0;
   let present = 0;
   for (const cat of ESSENTIAL_WALK_CATEGORIES) {
@@ -133,12 +140,10 @@ export function walkabilityScore(elements) {
   }
   essentialScore = essentialScore / ESSENTIAL_WALK_CATEGORIES.length; // 0..1
 
-  // Diversity multiplier: 0 essentials → BASE, all present → 1.0.
   const diversity =
     SCORING.WALK_DIVERSITY_BASE +
     (1 - SCORING.WALK_DIVERSITY_BASE) * (present / ESSENTIAL_WALK_CATEGORIES.length);
 
-  // Extended categories (convenience/market/clinic) give up to +12 pts.
   const extendedWeight = Object.entries(perCat)
     .filter(([c]) => !ESSENTIAL_WALK_CATEGORIES.includes(c))
     .reduce((s, [, w]) => s + w, 0);
@@ -150,6 +155,27 @@ export function walkabilityScore(elements) {
   for (const e of walk) counts[e.category] = (counts[e.category] || 0) + 1;
 
   return { score, present, diversity, counts, total: walk.length };
+}
+
+/**
+ * Transit: distance-decayed access to public transport, with stations weighted
+ * well above lone bus stops. Saturates once solid multi-modal access exists.
+ */
+export function transitScore(elements) {
+  const transit = elements.filter((e) => e.group === 'transit');
+  let weighted = 0;
+  const counts = {};
+  let stations = 0;
+
+  for (const e of transit) {
+    const w = TRANSIT_WEIGHT[e.category] ?? 0.4;
+    weighted += w * Math.exp(-e.dist / SCORING.TRANSIT_DECAY_M);
+    counts[e.category] = (counts[e.category] || 0) + 1;
+    if (w >= 0.7) stations += 1; // stations / halts
+  }
+
+  const score = Math.round(clamp(100 * (1 - Math.exp(-weighted / SCORING.TRANSIT_K)), 0, 100));
+  return { score, counts, total: transit.length, stations };
 }
 
 /** PM2.5 (µg/m³) → 0–100 (higher is cleaner), with a human category. */
@@ -166,12 +192,20 @@ export function airQualityScore(pm25) {
   return { score, pm25: Math.round(pm25 * 10) / 10, category };
 }
 
-/** Weighted blend; renormalizes if air quality is unavailable. */
-export function livabilityScore({ greenery, walkability, air }) {
+/**
+ * Livability: weighted blend of the available pillars. Any pillar that is null
+ * (e.g. air quality unavailable) is dropped and the remaining weights are
+ * renormalized so the result stays on a true 0–100 scale.
+ */
+export function livabilityScore(scores) {
   const w = SCORING.WEIGHTS;
-  if (air == null) {
-    const denom = w.greenery + w.walkability;
-    return Math.round((greenery * w.greenery + walkability * w.walkability) / denom);
+  let sum = 0;
+  let wsum = 0;
+  for (const key of Object.keys(w)) {
+    if (scores[key] == null) continue;
+    sum += scores[key] * w[key];
+    wsum += w[key];
   }
-  return Math.round(greenery * w.greenery + walkability * w.walkability + air * w.air);
+  if (wsum === 0) return 0;
+  return Math.round(sum / wsum);
 }

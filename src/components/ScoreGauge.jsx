@@ -27,6 +27,14 @@ export default function ScoreGauge({
 
   useEffect(() => {
     if (unavailable) return;
+    const reduce =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) {
+      progress.set(value);
+      display.set(value);
+      return;
+    }
     const a1 = animate(progress, value, { duration: 1.1, ease: [0.16, 1, 0.3, 1] });
     const a2 = animate(display, value, { duration: 1.1, ease: [0.16, 1, 0.3, 1] });
     return () => {

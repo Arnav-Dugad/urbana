@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Search, MapPin, LocateFixed, Loader2, X } from 'lucide-react';
+import { Search, MapPin, LocateFixed, Loader2, X, Star, History } from 'lucide-react';
 import useDebounce from '../hooks/useDebounce.js';
 import { searchPlaces } from '../lib/geocode.js';
 import { PRESETS } from '../config/tags.js';
+import { getSaved, getRecent, subscribe } from '../lib/places.js';
 
 export default function SearchBar({ onSelect }) {
   const [query, setQuery] = useState('');
@@ -11,8 +12,20 @@ export default function SearchBar({ onSelect }) {
   const [loading, setLoading] = useState(false);
   const [locating, setLocating] = useState(false);
   const [active, setActive] = useState(-1);
+  const [saved, setSaved] = useState([]);
+  const [recent, setRecent] = useState([]);
   const boxRef = useRef(null);
   const debounced = useDebounce(query, 350);
+
+  // Keep saved/recent lists in sync with the store.
+  useEffect(() => {
+    const refresh = () => {
+      setSaved(getSaved());
+      setRecent(getRecent());
+    };
+    refresh();
+    return subscribe(refresh);
+  }, []);
 
   // Fetch suggestions when the debounced query changes.
   useEffect(() => {
@@ -122,7 +135,43 @@ export default function SearchBar({ onSelect }) {
           )}
 
           {showPresets && (
-            <div className="p-1.5">
+            <div className="max-h-80 overflow-y-auto scroll-thin p-1.5">
+              {saved.length > 0 && (
+                <>
+                  <p className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">
+                    <Star size={11} className="text-amber-400" /> Saved
+                  </p>
+                  {saved.map((p) => (
+                    <button
+                      key={`s-${p.lat},${p.lon}`}
+                      onClick={() => choose({ ...p, short: p.name })}
+                      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-slate-200 transition hover:bg-white/[0.06]"
+                    >
+                      <Star size={14} className="shrink-0 fill-amber-400 text-amber-400" />
+                      <span className="truncate">{p.name}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+
+              {recent.length > 0 && (
+                <>
+                  <p className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">
+                    <History size={11} /> Recent
+                  </p>
+                  {recent.map((p) => (
+                    <button
+                      key={`r-${p.lat},${p.lon}`}
+                      onClick={() => choose({ ...p, short: p.name })}
+                      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-slate-200 transition hover:bg-white/[0.06]"
+                    >
+                      <History size={14} className="shrink-0 text-slate-500" />
+                      <span className="truncate">{p.name}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+
               <p className="px-2.5 py-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">
                 Try a place in India
               </p>

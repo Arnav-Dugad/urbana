@@ -18,6 +18,7 @@ export default {
         },
         greenery: '#34d399',
         walk: '#22d3ee',
+        transit: '#f472b6',
         air: '#f59e0b',
         livable: '#a78bfa',
       },

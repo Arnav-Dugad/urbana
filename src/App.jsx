@@ -7,35 +7,52 @@ import ScorePanel from './components/ScorePanel.jsx';
 import PeekSummary from './components/PeekSummary.jsx';
 import Legend from './components/Legend.jsx';
 import CompareDrawer from './components/CompareDrawer.jsx';
+import RadiusSelector from './components/RadiusSelector.jsx';
+import LayerControl from './components/LayerControl.jsx';
+import MethodologyModal from './components/MethodologyModal.jsx';
+import ReportCard from './components/ReportCard.jsx';
 import useUrbanAnalysis from './hooks/useUrbanAnalysis.js';
 import useMediaQuery from './hooks/useMediaQuery.js';
 import { reverseGeocode } from './lib/geocode.js';
-import { DEFAULT_LOCATION } from './config/tags.js';
+import { DEFAULT_LOCATION, ANALYSIS_RADIUS_M } from './config/tags.js';
 import { readLocationFromUrl, writeLocationToUrl, shareUrl } from './utils/url.js';
+import { isSaved, toggleSaved, pushRecent, subscribe } from './lib/places.js';
 
 // Set this to your GitHub repo to show the source link in the header.
 const REPO_URL = 'https://github.com/Arnav-Dugad/urbana';
 
 export default function App() {
-  // Seed from URL if present, else the default India view.
   const initial = useMemo(() => readLocationFromUrl(), []);
   const [location, setLocation] = useState(initial?.primary || DEFAULT_LOCATION);
   const [compare, setCompare] = useState(initial?.compare || null);
   const [compareOpen, setCompareOpen] = useState(Boolean(initial?.compare));
+  const [radius, setRadius] = useState(initial?.radius || ANALYSIS_RADIUS_M);
 
   const isDesktop = useMediaQuery('(min-width: 640px)');
-  // On mobile the score sheet starts collapsed (peek) so the map is usable.
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  const primary = useUrbanAnalysis(location.lat, location.lon);
-  const secondary = useUrbanAnalysis(compare?.lat ?? null, compare?.lon ?? null);
+  const [visible, setVisible] = useState({ green: true, walk: true, transit: true, heatmap: false });
+  const [focusedElement, setFocusedElement] = useState(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [methodologyOpen, setMethodologyOpen] = useState(false);
+  const [savedFlag, setSavedFlag] = useState(false);
 
-  // Keep the URL in sync so the view is always shareable.
+  const primary = useUrbanAnalysis(location.lat, location.lon, radius);
+  const secondary = useUrbanAnalysis(compare?.lat ?? null, compare?.lon ?? null, radius);
+
+  // Keep the URL shareable (includes radius + compare).
   useEffect(() => {
-    writeLocationToUrl(location, compare);
-  }, [location, compare]);
+    writeLocationToUrl(location, compare, radius);
+  }, [location, compare, radius]);
 
-  // Reverse-geocode any location that arrived without a name (map clicks, GPS).
+  // Track whether the current location is saved.
+  useEffect(() => {
+    const refresh = () => setSavedFlag(isSaved(location.lat, location.lon));
+    refresh();
+    return subscribe(refresh);
+  }, [location.lat, location.lon]);
+
+  // Reverse-geocode locations that arrived without a name (map clicks, GPS).
   useEffect(() => {
     if (location.name) return;
     const ctrl = new AbortController();
@@ -55,13 +72,17 @@ export default function App() {
   }, [compare]);
 
   const handleSelect = useCallback((place) => {
-    setLocation({ lat: place.lat, lon: place.lon, name: place.name });
+    const next = { lat: place.lat, lon: place.lon, name: place.name };
+    setLocation(next);
+    pushRecent(next);
+    setFocusedElement(null);
   }, []);
 
   const handlePick = useCallback(
     (lat, lon) => {
       setLocation({ lat, lon, name: null });
-      if (!isDesktop) setSheetOpen(true); // reveal results after a map tap
+      setFocusedElement(null);
+      if (!isDesktop) setSheetOpen(true);
     },
     [isDesktop]
   );
@@ -78,26 +99,48 @@ export default function App() {
     });
   }, []);
 
-  const placeName =
-    location.name || `${location.lat.toFixed(4)}, ${location.lon.toFixed(4)}`;
+  const toggleLayer = useCallback((key) => {
+    setVisible((v) => ({ ...v, [key]: !v[key] }));
+  }, []);
 
-  const link = shareUrl(location, compare);
+  const placeName = location.name || `${location.lat.toFixed(4)}, ${location.lon.toFixed(4)}`;
+
+  const link = shareUrl(location, compare, radius);
+
+  const panelProps = {
+    data: primary.data,
+    loading: primary.loading,
+    error: primary.error,
+    onRetry: primary.refetch,
+    placeName,
+    onCompare: toggleCompare,
+    comparing: compareOpen,
+    compareData: compareOpen ? secondary.data : null,
+    shareUrl: link,
+    saved: savedFlag,
+    onToggleSave: () => toggleSaved({ lat: location.lat, lon: location.lon, name: placeName }),
+    onOpenReport: () => setReportOpen(true),
+    onOpenMethodology: () => setMethodologyOpen(true),
+    onFocus: setFocusedElement,
+  };
 
   return (
     <div className="relative h-full w-full overflow-hidden">
-      {/* Map fills the screen */}
+      {/* Map */}
       <div className="absolute inset-0 z-0">
         <MapView
-          location={location}
+          location={{ ...location, radius }}
           compare={compare}
           elements={primary.data?.elements || []}
           onPick={handlePick}
           onPickCompare={handlePickCompare}
           compareMode={compareOpen}
+          visible={visible}
+          focusedElement={focusedElement}
         />
       </div>
 
-      {/* Overlay UI — the grid itself ignores pointer events; children opt in */}
+      {/* Overlay UI */}
       <div className="pointer-events-none absolute inset-0 z-[1000] flex flex-col">
         {/* Top bar */}
         <div className="flex flex-wrap items-center gap-2.5 p-2.5 sm:gap-3 sm:p-4">
@@ -114,7 +157,18 @@ export default function App() {
           )}
         </div>
 
-        {/* Middle region: legend (desktop only) + compare drawer above the map */}
+        {/* Controls row: radius + layers */}
+        <div className="flex flex-wrap items-center gap-2.5 px-2.5 sm:px-4">
+          <div className="glass pointer-events-auto flex items-center gap-2 rounded-xl px-2.5 py-1.5">
+            <span className="hidden text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:inline">
+              Radius
+            </span>
+            <RadiusSelector value={radius} onChange={setRadius} />
+          </div>
+          <LayerControl visible={visible} onToggle={toggleLayer} />
+        </div>
+
+        {/* Middle: legend + compare drawer */}
         <div className="flex flex-1 items-end justify-start gap-3 overflow-hidden p-3 sm:p-4">
           <div className="hidden pointer-events-auto sm:block">
             <Legend />
@@ -131,21 +185,10 @@ export default function App() {
         </div>
       </div>
 
-      {/* ---- Score panel ---------------------------------------------------
-          Desktop (sm+): fixed right rail, always full.
-          Mobile: bottom sheet that collapses to a peek so the map stays usable. */}
+      {/* Score panel — desktop right rail / mobile bottom sheet */}
       {isDesktop ? (
         <div className="glass-strong pointer-events-auto absolute right-4 top-[4.75rem] bottom-4 z-[1100] flex w-[384px] flex-col overflow-hidden rounded-2xl p-5">
-          <ScorePanel
-            data={primary.data}
-            loading={primary.loading}
-            error={primary.error}
-            onRetry={primary.refetch}
-            placeName={placeName}
-            onCompare={toggleCompare}
-            comparing={compareOpen}
-            shareUrl={link}
-          />
+          <ScorePanel {...panelProps} />
         </div>
       ) : (
         <div
@@ -153,7 +196,6 @@ export default function App() {
             sheetOpen ? 'h-[82vh]' : 'h-auto'
           }`}
         >
-          {/* Grab handle */}
           <button
             onClick={() => setSheetOpen((o) => !o)}
             className="flex w-full flex-col items-center pt-2"
@@ -173,16 +215,7 @@ export default function App() {
                 </button>
               </div>
               <div className="min-h-0 flex-1 px-4 pb-4">
-                <ScorePanel
-                  data={primary.data}
-                  loading={primary.loading}
-                  error={primary.error}
-                  onRetry={primary.refetch}
-                  placeName={placeName}
-                  onCompare={toggleCompare}
-                  comparing={compareOpen}
-                  shareUrl={link}
-                />
+                <ScorePanel {...panelProps} />
               </div>
             </>
           ) : (
@@ -198,6 +231,10 @@ export default function App() {
           )}
         </div>
       )}
+
+      {/* Modals */}
+      <MethodologyModal open={methodologyOpen} onClose={() => setMethodologyOpen(false)} />
+      <ReportCard open={reportOpen} onClose={() => setReportOpen(false)} data={primary.data} placeName={placeName} />
     </div>
   );
 }

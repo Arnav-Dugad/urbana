@@ -29,6 +29,14 @@ function classify(tags) {
 function elementCoord(el) {
   if (el.type === 'node') return { lat: el.lat, lon: el.lon };
   if (el.center) return { lat: el.center.lat, lon: el.center.lon };
+  // `out geom;` returns a `bounds` box — its midpoint is a good marker anchor
+  // (far better than pinning a polygon at its first vertex).
+  if (el.bounds) {
+    return {
+      lat: (el.bounds.minlat + el.bounds.maxlat) / 2,
+      lon: (el.bounds.minlon + el.bounds.maxlon) / 2,
+    };
+  }
   if (el.geometry?.length) return { lat: el.geometry[0].lat, lon: el.geometry[0].lon };
   return null;
 }

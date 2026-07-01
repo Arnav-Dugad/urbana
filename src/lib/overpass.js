@@ -1,14 +1,18 @@
 /**
- * Overpass API access layer.
+ * Overpass API access layer (client side).
  *
- * Public Overpass instances are free but rate-limited and occasionally down,
- * so we build one compact query and try a list of mirrors in turn, with a
- * short retry, before surfacing an error. All requests honour an external
- * AbortSignal so the hook can cancel stale in-flight work.
+ * The app calls a SAME-ORIGIN proxy (`/api/overpass`) rather than public
+ * Overpass servers directly — that removes the browser-specific failure modes
+ * (CORS, ad-blockers, per-client mod_security 406s) that previously left the
+ * analysis stuck loading. If the proxy itself is unreachable we fall back to
+ * hitting public mirrors directly, so the app still degrades gracefully.
  */
 import { ANALYSIS_RADIUS_M, GREEN_TAGS, WALK_TAGS } from '../config/tags.js';
 
-const MIRRORS = [
+const PROXY_URL = '/api/overpass';
+
+// Direct fallbacks (only used if the same-origin proxy can't be reached).
+const DIRECT_MIRRORS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
@@ -16,9 +20,11 @@ const MIRRORS = [
 
 /**
  * Build the Overpass QL query for a point.
- * `nwr` = node/way/relation in one line; `out center tags` returns a
- * representative point (for markers) plus tags, and `out geom` on the ways
- * gives us vertex geometry for accurate area maths.
+ *
+ * `nwr` = node/way/relation in one line. We finish with `out geom;` (NOT
+ * `out geom tags center;` which was measured at ~24 s — right at the server
+ * timeout). `out geom;` returns tags + full geometry + a `bounds` box for
+ * every element in ~9 s, which is everything the scorer needs.
  */
 export function buildOverpassQuery(lat, lon, radius = ANALYSIS_RADIUS_M) {
   const around = `(around:${radius},${lat},${lon})`;
@@ -29,21 +35,17 @@ export function buildOverpassQuery(lat, lon, radius = ANALYSIS_RADIUS_M) {
     ...WALK_TAGS.extended,
   ];
 
-  // Trees are always nodes; everything else can be node/way/relation. We ask
-  // for geometry so polygon areas are exact.
-  const lines = allTags
-    .map(([k, v]) => `  nwr["${k}"="${v}"]${around};`)
-    .join('\n');
+  const lines = allTags.map(([k, v]) => `  nwr["${k}"="${v}"]${around};`).join('\n');
 
   return `[out:json][timeout:25];
 (
 ${lines}
 );
-out geom tags center;`;
+out geom;`;
 }
 
-/** Fetch with timeout + external abort signal. */
-async function fetchWithTimeout(url, body, externalSignal, timeoutMs = 30000) {
+/** fetch() wrapper: honours an external abort signal AND a hard timeout. */
+async function timedFetch(url, options, externalSignal, timeoutMs) {
   const ctrl = new AbortController();
   const onAbort = () => ctrl.abort();
   if (externalSignal) {
@@ -52,68 +54,106 @@ async function fetchWithTimeout(url, body, externalSignal, timeoutMs = 30000) {
   }
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    // Canonical Overpass form: `data=<url-encoded QL>`. This is exactly what
-    // browser clients (overpass-turbo etc.) send, so it's the most widely
-    // accepted format across public instances.
-    return await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-      },
-      body: `data=${encodeURIComponent(body)}`,
-      signal: ctrl.signal,
-    });
+    return await fetch(url, { ...options, signal: ctrl.signal });
   } finally {
     clearTimeout(timer);
     if (externalSignal) externalSignal.removeEventListener('abort', onAbort);
   }
 }
 
-/**
- * Run a query against the mirror list. Resolves with parsed JSON, or throws
- * an Error tagged with a `.code` we can present nicely in the UI.
- */
-export async function fetchOverpass(query, signal) {
-  let lastError;
-  for (const url of MIRRORS) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      // If the caller cancelled (coords changed), stop immediately.
-      if (signal?.aborted) {
-        const e = new Error('aborted');
-        e.code = 'ABORTED';
-        throw e;
-      }
-      try {
-        const res = await fetchWithTimeout(url, query, signal);
-        if (res.status === 429 || res.status === 504) {
-          lastError = new Error(`Rate limited (${res.status})`);
-          lastError.code = 'RATE_LIMIT';
-          await sleep(600 * (attempt + 1));
-          continue;
-        }
-        if (!res.ok) {
-          lastError = new Error(`Overpass ${res.status}`);
-          lastError.code = 'SERVER';
-          continue;
-        }
-        return await res.json();
-      } catch (err) {
-        if (err.name === 'AbortError' && signal?.aborted) {
-          err.code = 'ABORTED';
-          throw err;
-        }
-        lastError = err; // timeout or network — try next mirror
-      }
-    }
-  }
-  const e = new Error(
-    lastError?.code === 'RATE_LIMIT'
-      ? 'All Overpass mirrors are busy right now. Please try again in a moment.'
-      : 'Could not reach the map data service. Check your connection and retry.'
-  );
-  e.code = lastError?.code || 'NETWORK';
-  throw e;
+function abortedError() {
+  const e = new Error('aborted');
+  e.code = 'ABORTED';
+  return e;
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Fetch OSM features for a query. Tries the same-origin proxy first, then
+ * public mirrors. Resolves with parsed Overpass JSON or throws an Error
+ * tagged with `.code` for the UI ('RATE_LIMIT' | 'NETWORK' | 'ABORTED').
+ */
+export async function fetchOverpass(query, signal) {
+  if (signal?.aborted) throw abortedError();
+
+  // 1) Same-origin proxy (the reliable path). It already tries every mirror
+  //    server-side, so if it gives a definitive answer (200/502/503) we trust
+  //    it and DON'T redundantly re-hit the same mirrors from the browser.
+  //    We only fall back to direct mirrors when the proxy itself is missing
+  //    or broken (404 on a non-Vercel static host, network error, or 500).
+  try {
+    const res = await timedFetch(
+      PROXY_URL,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ query }),
+      },
+      signal,
+      28000
+    );
+    if (res.ok) {
+      const json = await res.json();
+      if (json && Array.isArray(json.elements)) return json;
+      // 200 but unexpected shape → treat as proxy malfunction, try direct.
+    } else if (res.status === 503) {
+      const e = new Error('All Overpass mirrors are busy right now. Please try again in a moment.');
+      e.code = 'RATE_LIMIT';
+      throw e;
+    } else if (res.status === 502) {
+      // Proxy reached every mirror and all failed — surface it, don't retry.
+      const e = new Error('Could not reach the map-data service. Check your connection and retry.');
+      e.code = 'NETWORK';
+      throw e;
+    }
+    // 404 / 500 / other → proxy absent or buggy → fall through to direct.
+  } catch (err) {
+    if (err.code === 'ABORTED' || (err.name === 'AbortError' && signal?.aborted)) {
+      throw abortedError();
+    }
+    if (err.code === 'RATE_LIMIT' || err.code === 'NETWORK') throw err;
+    // genuine proxy-unreachable (network throw) — fall through to direct mirrors
+  }
+
+  // 2) Direct-mirror fallback (only when the proxy couldn't answer).
+  return fetchDirectMirrors(query, signal);
+}
+
+async function fetchDirectMirrors(query, signal) {
+  let rateLimited = false;
+  for (const url of DIRECT_MIRRORS) {
+    if (signal?.aborted) throw abortedError();
+    try {
+      const res = await timedFetch(
+        url,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          body: `data=${encodeURIComponent(query)}`,
+        },
+        signal,
+        18000
+      );
+      if (res.status === 429 || res.status === 504) {
+        rateLimited = true;
+        continue;
+      }
+      if (!res.ok) continue;
+      const json = await res.json();
+      if (json && Array.isArray(json.elements)) return json;
+    } catch (err) {
+      if (err.name === 'AbortError' && signal?.aborted) throw abortedError();
+      // timeout / network / CORS — try the next mirror
+    }
+  }
+
+  const e = new Error(
+    rateLimited
+      ? 'All Overpass mirrors are busy right now. Please try again in a moment.'
+      : 'Could not reach the map-data service. Check your connection and retry.'
+  );
+  e.code = rateLimited ? 'RATE_LIMIT' : 'NETWORK';
+  throw e;
+}

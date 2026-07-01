@@ -66,6 +66,22 @@ body::before {
   border: none !important;
   box-shadow: none !important;
 }
+/* Push the zoom control clear of the floating top bar (search + header). */
+.leaflet-top.leaflet-left {
+  top: 4.5rem;
+}
+@media (max-width: 639px) {
+  .leaflet-top.leaflet-left {
+    top: 7rem; /* mobile top bar can wrap to two rows */
+  }
+  /* Larger, easier-to-tap zoom buttons on touch screens */
+  .leaflet-control-zoom a {
+    width: 34px !important;
+    height: 34px !important;
+    line-height: 34px !important;
+    font-size: 18px !important;
+  }
+}
 .leaflet-control-zoom a {
   background: rgba(18, 24, 33, 0.9) !important;
   color: #cbd5e1 !important;

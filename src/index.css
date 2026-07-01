@@ -1,0 +1,146 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0b0f14;
+  color: #e6edf3;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+/* Ambient background gradient — subtle, hand-tuned, never flat black */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 700px at 82% -10%, rgba(52, 211, 153, 0.10), transparent 60%),
+    radial-gradient(900px 600px at 6% 108%, rgba(34, 211, 238, 0.08), transparent 55%),
+    radial-gradient(700px 500px at 50% 50%, rgba(167, 139, 250, 0.05), transparent 70%);
+}
+
+@layer components {
+  .glass {
+    @apply bg-ink-850/70 backdrop-blur-xl border border-white/[0.06] shadow-panel;
+  }
+  .glass-strong {
+    @apply bg-ink-850/90 backdrop-blur-2xl border border-white/[0.07] shadow-glow;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-slate-300;
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'cv01' 1;
+  }
+}
+
+/* Tabular figures for all score numerals */
+.font-display {
+  letter-spacing: -0.02em;
+}
+
+/* ---- Leaflet overrides for the dark console look ---- */
+.leaflet-container {
+  background: #0b0f14 !important;
+  font-family: 'Inter', sans-serif;
+  outline: none;
+}
+.leaflet-control-zoom {
+  border: none !important;
+  box-shadow: none !important;
+}
+.leaflet-control-zoom a {
+  background: rgba(18, 24, 33, 0.9) !important;
+  color: #cbd5e1 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: blur(8px);
+  transition: all 0.15s ease;
+}
+.leaflet-control-zoom a:hover {
+  background: rgba(30, 40, 54, 0.95) !important;
+  color: #fff !important;
+}
+.leaflet-control-attribution {
+  background: rgba(11, 15, 20, 0.7) !important;
+  color: #64748b !important;
+  backdrop-filter: blur(6px);
+  font-size: 10px !important;
+}
+.leaflet-control-attribution a {
+  color: #94a3b8 !important;
+}
+
+/* Custom POI marker: divIcon dot with soft ring */
+.poi-dot {
+  border-radius: 9999px;
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.35);
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+}
+
+/* Analyzed-location pulsing pin */
+.pulse-pin {
+  position: relative;
+}
+.pulse-pin::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  animation: pulse-ring 2s ease-out infinite;
+}
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+/* Leaflet tooltip restyle */
+.leaflet-tooltip.urbana-tip {
+  background: rgba(14, 20, 27, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: #e6edf3;
+  font-size: 11.5px;
+  padding: 4px 8px;
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+}
+.leaflet-tooltip.urbana-tip::before {
+  border-top-color: rgba(14, 20, 27, 0.95);
+}
+
+/* Thin scrollbar in panels */
+.scroll-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
